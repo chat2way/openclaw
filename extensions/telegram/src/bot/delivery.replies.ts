@@ -11,11 +11,16 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForDelivery,
+} from "openclaw/plugin-sdk/outbound-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { TelegramInlineButtons } from "../button-types.js";
@@ -45,6 +50,7 @@ const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
 const CAPTION_TOO_LONG_RE = /caption is too long/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
+const silentReplyLogger = createSubsystemLogger("telegram/silent-reply");
 
 type DeliveryProgress = ReplyThreadDeliveryProgress & {
   deliveredCount: number;
@@ -581,6 +587,7 @@ export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams):
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
+  cfg?: import("openclaw/plugin-sdk/config-runtime").OpenClawConfig;
   chatId: string;
   accountId?: string;
   sessionKeyForInternalHooks?: string;
@@ -620,7 +627,35 @@ export async function deliverReplies(params: {
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
   });
-  for (const originalReply of params.replies) {
+  const candidateReplies: ReplyPayload[] = [];
+  for (const reply of params.replies) {
+    if (!reply || typeof reply !== "object") {
+      params.runtime.error?.(danger("reply missing text/media"));
+      continue;
+    }
+    candidateReplies.push(reply);
+  }
+  const normalizedReplies = projectOutboundPayloadPlanForDelivery(
+    createOutboundPayloadPlan(candidateReplies, {
+      cfg: params.cfg,
+      sessionKey: params.sessionKeyForInternalHooks,
+      surface: "telegram",
+    }),
+  );
+  const originalExactSilentCount = candidateReplies.filter(
+    (reply) => typeof reply.text === "string" && reply.text.trim().toUpperCase() === "NO_REPLY",
+  ).length;
+  if (originalExactSilentCount > 0) {
+    silentReplyLogger.info("telegram delivery normalized NO_REPLY candidates", {
+      sessionKey: params.sessionKeyForInternalHooks,
+      chatId: params.chatId,
+      originalCount: candidateReplies.length,
+      normalizedCount: normalizedReplies.length,
+      originalExactSilentCount,
+      normalizedTexts: normalizedReplies.map((reply) => reply.text ?? ""),
+    });
+  }
+  for (const originalReply of normalizedReplies) {
     let reply = originalReply;
     const mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls

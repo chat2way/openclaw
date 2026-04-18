@@ -16,9 +16,15 @@ const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
 }));
 
-vi.mock("../../infra/outbound/deliver-runtime.js", () => ({
-  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
-}));
+vi.mock("../../infra/outbound/deliver-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/outbound/deliver-runtime.js")>(
+    "../../infra/outbound/deliver-runtime.js",
+  );
+  return {
+    ...actual,
+    deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+  };
+});
 
 const { routeReply } = await import("./route-reply.js");
 
@@ -219,6 +225,40 @@ describe("routeReply", () => {
           text: `${SILENT_REPLY_TOKEN} -- (why am I here?)`,
         }),
       ],
+    });
+  });
+
+  it("passes policySessionKey through to outbound delivery for native command targets", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = await routeReply({
+      payload: { text: SILENT_REPLY_TOKEN },
+      channel: "telegram",
+      to: "8231046597",
+      cfg,
+      sessionKey: "agent:test:telegram:slash:8231046597",
+      policySessionKey: "agent:test:telegram:direct:8231046597",
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDelivery({
+      session: expect.objectContaining({
+        key: "agent:test:telegram:slash:8231046597",
+        policyKey: "agent:test:telegram:direct:8231046597",
+      }),
     });
   });
 

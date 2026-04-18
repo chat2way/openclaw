@@ -12,11 +12,15 @@ import type {
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForDelivery,
+} from "openclaw/plugin-sdk/outbound-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isAbortRequestText, type ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import {
@@ -65,6 +69,7 @@ import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -1060,6 +1065,35 @@ export const dispatchTelegramMessage = async ({
       mediaLoader: telegramDeps.loadWebMedia,
     });
     sentFallback = result.delivered;
+  }
+
+  if (!queuedFinal && !sentFallback && !dispatchError) {
+    const policySessionKey =
+      ctxPayload.CommandSource === "native"
+        ? (ctxPayload.CommandTargetSessionKey ?? ctxPayload.SessionKey)
+        : ctxPayload.SessionKey;
+    const silentReplyFallback = projectOutboundPayloadPlanForDelivery(
+      createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+        cfg,
+        sessionKey: policySessionKey,
+        surface: "telegram",
+      }),
+    );
+    if (silentReplyFallback.length > 0) {
+      const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
+        replies: silentReplyFallback,
+        ...deliveryBaseOptions,
+        silent: false,
+        mediaLoader: telegramDeps.loadWebMedia,
+      });
+      sentFallback = result.delivered;
+    }
+    silentReplyDispatchLogger.info("telegram turn ended without visible final response", {
+      sessionKey: policySessionKey,
+      chatId: String(chatId),
+      queuedFinal,
+      sentFallback,
+    });
   }
 
   const hasFinalResponse = queuedFinal || sentFallback;

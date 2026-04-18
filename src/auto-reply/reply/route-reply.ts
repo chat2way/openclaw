@@ -44,6 +44,8 @@ export type RouteReplyParams = {
   to: string;
   /** Session key for deriving agent identity defaults (multi-agent). */
   sessionKey?: string;
+  /** Session key for policy resolution when native-command delivery targets a different session. */
+  policySessionKey?: string;
   /** Provider account id (multi-account). */
   accountId?: string;
   /** Originating sender id for sender-scoped outbound media policy. */
@@ -93,11 +95,10 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   const normalizedChannel = normalizeMessageChannel(channel);
   const channelId =
     normalizeChannelId(channel) ?? normalizeOptionalLowercaseString(channel) ?? null;
-  const plugin = channelId
-    ? (getLoadedChannelPlugin(channelId) ?? getBundledChannelPlugin(channelId))
-    : undefined;
-  const messaging = plugin?.messaging;
-  const threading = plugin?.threading;
+  const loadedPlugin = channelId ? getLoadedChannelPlugin(channelId) : undefined;
+  const bundledPlugin = channelId ? getBundledChannelPlugin(channelId) : undefined;
+  const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
+  const threading = loadedPlugin?.threading ?? bundledPlugin?.threading;
   const resolvedAgentId = params.sessionKey
     ? resolveSessionAgentId({
         sessionKey: params.sessionKey,
@@ -196,6 +197,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       cfg,
       agentId: resolvedAgentId,
       sessionKey: params.sessionKey,
+      policySessionKey: params.policySessionKey,
       requesterSenderId: params.requesterSenderId,
       requesterSenderName: params.requesterSenderName,
       requesterSenderUsername: params.requesterSenderUsername,
