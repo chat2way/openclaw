@@ -248,7 +248,7 @@ export async function handleToolsInvokeHttpRequest(
     allowGatewaySubagentBinding: true,
     allowMediaInvokeCommands: true,
     surface: "http",
-    disablePluginTools: isKnownCoreToolId(toolName),
+    disablePluginTools: isKnownCoreToolId(toolName) && toolName !== "browser",
     senderIsOwner,
   });
   const gatewayFiltered = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
